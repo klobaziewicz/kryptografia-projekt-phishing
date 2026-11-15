@@ -55,12 +55,15 @@ def _ensure_scheme(url: str) -> str:
 
 
 def _parse_parts(url: str) -> tuple[str, str, str]:
-    """Zwróć (host, path, scheme) dla URL-a."""
-    parsed = urlparse(_ensure_scheme(url))
-    host = (parsed.hostname or "").lower()
-    path = parsed.path or ""
-    scheme = (parsed.scheme or "").lower()
-    return host, path, scheme
+    """Zwróć (host, path, scheme) dla URL-a; przy błędzie parsowania — puste wartości."""
+    try:
+        parsed = urlparse(_ensure_scheme(url))
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or ""
+        scheme = (parsed.scheme or "").lower()
+        return host, path, scheme
+    except ValueError:
+        return "", "", ""
 
 
 def _is_ip_host(host: str) -> bool:
@@ -116,6 +119,18 @@ def structural_features(urls: pd.Series | Iterable[str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=list(STRUCTURAL_COLUMNS))
 
 
+class StructuralTransformer(BaseEstimator, TransformerMixin):
+    """Transformer sklearn: URL-e → macierz cech strukturalnych."""
+
+    def fit(self, urls, y=None):
+        """Brak parametrów do estymacji."""
+        return self
+
+    def transform(self, urls):
+        """Zwróć macierz cech strukturalnych."""
+        return structural_features(pd.Series(list(urls))).to_numpy(dtype=np.float64)
+
+
 def build_tfidf(kind: str = "char") -> TfidfVectorizer:
     """Zbuduj wektoryzator TF-IDF (znaki lub słowa URL)."""
     if kind == "char":
@@ -142,8 +157,13 @@ def build_tfidf(kind: str = "char") -> TfidfVectorizer:
 class CombinedURLFeatures(BaseEstimator, TransformerMixin):
     """Połącz przeskalowane cechy strukturalne z TF-IDF w jedną macierz rzadką."""
 
-    def __init__(self, kind: str = "char") -> None:
+    def __init__(
+        self,
+        kind: str = "char",
+        ngram_range: tuple[int, int] | None = None,
+    ) -> None:
         self.kind = kind
+        self.ngram_range = ngram_range
         self.scaler_: MaxAbsScaler | None = None
         self.tfidf_: TfidfVectorizer | None = None
 
@@ -152,7 +172,10 @@ class CombinedURLFeatures(BaseEstimator, TransformerMixin):
         series = pd.Series(list(urls), dtype="string").fillna("").astype(str)
         structural = structural_features(series)
         self.scaler_ = MaxAbsScaler().fit(structural.to_numpy(dtype=np.float64))
-        self.tfidf_ = build_tfidf(self.kind).fit(series)
+        vectorizer = build_tfidf(self.kind)
+        if self.ngram_range is not None:
+            vectorizer.set_params(ngram_range=self.ngram_range)
+        self.tfidf_ = vectorizer.fit(series)
         return self
 
     def transform(self, urls: pd.Series | Iterable[str]) -> csr_matrix:

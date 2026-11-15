@@ -28,6 +28,13 @@ def sample_urls() -> pd.Series:
     )
 
 
+def test_structural_features_handles_malformed_ipv6_like_url() -> None:
+    """Uszkodzony URL nie przerywa ekstrakcji cech."""
+    features = structural_features(pd.Series(["http://[::broken/path", "https://ok.example/"]))
+    assert len(features) == 2
+    assert features.loc[1, "is_https"] == 1
+
+
 def test_structural_features_columns_and_values(sample_urls: pd.Series) -> None:
     """Cechy strukturalne mają oczekiwane kolumny i poprawne wartości."""
     features = structural_features(sample_urls)
