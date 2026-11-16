@@ -1,6 +1,10 @@
 """Ładowanie, czyszczenie i podział danych URL-i phishingowych."""
 
+from __future__ import annotations
+
+import re
 from pathlib import Path
+from typing import Literal, overload
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -8,6 +12,9 @@ from sklearn.model_selection import train_test_split
 RAW_DATA_PATH = Path("data/raw/phishing_site_urls.csv")
 PROCESSED_DATA_PATH = Path("data/processed")
 REQUIRED_COLUMNS = ["URL", "Label"]
+
+_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+_WWW_RE = re.compile(r"^www\.", re.IGNORECASE)
 
 
 def _require_columns(df: pd.DataFrame) -> None:
@@ -17,6 +24,14 @@ def _require_columns(df: pd.DataFrame) -> None:
         raise ValueError(f"Brak wymaganych kolumn: {', '.join(sorted(missing))}")
 
 
+def normalize_url(url: str) -> str:
+    """Znormalizuj URL do klucza deduplikacji (bez schematu, www. i końcowego /)."""
+    normalized = str(url).strip().lower()
+    normalized = _SCHEME_RE.sub("", normalized)
+    normalized = _WWW_RE.sub("", normalized)
+    return normalized.rstrip("/")
+
+
 def load_raw(path: str | Path = RAW_DATA_PATH) -> pd.DataFrame:
     """Wczytaj surowy plik CSV z kolumnami URL i Label."""
     df = pd.read_csv(path)
@@ -24,9 +39,22 @@ def load_raw(path: str | Path = RAW_DATA_PATH) -> pd.DataFrame:
     return df.loc[:, REQUIRED_COLUMNS].copy()
 
 
-def clean(df: pd.DataFrame) -> pd.DataFrame:
-    """Oczyść URL-e, usuń puste i powielone wiersze oraz zakoduj etykiety."""
+@overload
+def clean(df: pd.DataFrame, *, return_stats: Literal[False] = False) -> pd.DataFrame: ...
+
+
+@overload
+def clean(
+    df: pd.DataFrame, *, return_stats: Literal[True]
+) -> tuple[pd.DataFrame, dict[str, int]]: ...
+
+
+def clean(
+    df: pd.DataFrame, *, return_stats: bool = False
+) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, int]]:
+    """Oczyść URL-e, usuń konflikty etykiet i duplikaty oraz zakoduj etykiety."""
     _require_columns(df)
+    rows_in = len(df)
     cleaned = df.loc[:, REQUIRED_COLUMNS].copy()
     cleaned["URL"] = cleaned["URL"].astype("string").str.strip()
     labels = cleaned["Label"].astype("string").str.strip().str.lower()
@@ -36,6 +64,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     )
     cleaned = cleaned.loc[valid_rows].copy()
     labels = labels.loc[valid_rows]
+    empty_removed = rows_in - len(cleaned)
 
     mapped_labels = labels.map({"bad": 1, "good": 0})
     if mapped_labels.isna().any():
@@ -43,8 +72,29 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Nieznane etykiety: {invalid_labels}")
 
     cleaned["Label"] = mapped_labels.astype(int)
-    cleaned = cleaned.drop_duplicates(subset="URL", keep="first")
-    return cleaned.reset_index(drop=True)
+    cleaned["url_norm"] = cleaned["URL"].map(normalize_url)
+
+    label_counts = cleaned.groupby("url_norm")["Label"].nunique()
+    conflict_keys = label_counts[label_counts > 1].index
+    conflict_mask = cleaned["url_norm"].isin(conflict_keys)
+    conflicts_removed = int(conflict_mask.sum())
+    cleaned = cleaned.loc[~conflict_mask].copy()
+
+    before_dedup = len(cleaned)
+    cleaned = cleaned.drop_duplicates(subset="url_norm", keep="first")
+    duplicates_removed = before_dedup - len(cleaned)
+
+    cleaned = cleaned.drop(columns=["url_norm"]).reset_index(drop=True)
+    stats = {
+        "rows_in": rows_in,
+        "empty_removed": empty_removed,
+        "conflicts_removed": conflicts_removed,
+        "duplicates_removed": duplicates_removed,
+        "rows_out": len(cleaned),
+    }
+    if return_stats:
+        return cleaned, stats
+    return cleaned
 
 
 def split(
@@ -91,7 +141,14 @@ def _print_split_summary(name: str, df: pd.DataFrame) -> None:
 
 
 if __name__ == "__main__":
-    data = clean(load_raw())
+    data, stats = clean(load_raw(), return_stats=True)
+    print(
+        f"clean: we={stats['rows_in']} | "
+        f"puste={stats['empty_removed']} | "
+        f"konflikty etykiet={stats['conflicts_removed']} | "
+        f"duplikaty={stats['duplicates_removed']} | "
+        f"wy={stats['rows_out']}"
+    )
     train_df, val_df, test_df = split(data)
     save_splits(train_df, val_df, test_df)
     for split_name, split_df in (

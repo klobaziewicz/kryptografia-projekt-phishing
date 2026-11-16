@@ -1,0 +1,41 @@
+{
+  "baseline_dummy": {},
+  "baseline_structural_lr": {
+    "clf__C": 10.0
+  },
+  "nb_char": {
+    "clf__alpha": 0.1,
+    "tfidf__ngram_range": [
+      3,
+      5
+    ]
+  },
+  "nb_word": {
+    "clf__alpha": 0.1,
+    "tfidf__ngram_range": [
+      1,
+      2
+    ]
+  },
+  "svm_char": {
+    "clf__C": 10.0,
+    "tfidf__ngram_range": [
+      3,
+      5
+    ]
+  },
+  "svm_word": {
+    "clf__C": 1.0,
+    "tfidf__ngram_range": [
+      1,
+      2
+    ]
+  },
+  "svm_combined": {
+    "clf__C": 10.0,
+    "features__ngram_range": [
+      3,
+      5
+    ]
+  }
+}
